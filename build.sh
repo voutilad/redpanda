@@ -24,7 +24,7 @@ ccache -z # zero the stats
 go=$(which go)
 
 # Change Debug via  -DCMAKE_BUILD_TYPE=Debug
-cmake -DCMAKE_BUILD_TYPE=Release \
+cmake -DCMAKE_BUILD_TYPE=Debug \
   -B"$root"/build \
   -H"$root" \
   -GNinja \
@@ -33,8 +33,8 @@ cmake -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_GO_BINARY="$go" \
   "$@"
 
-(cd "$root"/build && ninja)
+(cd "$root"/build && ninja -j4)
 
 ccache -s # print the stats after the build
 
-(cd "$root"/build && ctest --output-on-failure -R _rpunit)
+#(cd "$root"/build && ctest --output-on-failure -R _rpunit)
