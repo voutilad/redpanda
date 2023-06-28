@@ -15,6 +15,7 @@ namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
     ss::app_template app{};
+    ss::sharded<wsrp::service> ws;
 
     // Parse any of our CLI arguments.
     auto opts = app.add_options();
@@ -52,24 +53,39 @@ int main(int argc, char** argv) {
               std::runtime_error("failed to parse addresses"));
         }
 
+        return ws.start(ss::socket_address(ss::ipv4_addr("127.0.0.1", 8000)))
+          .then([&ws] {
+	      wsrp::ws_log.info("starting shards...");
+              return ws
+		.invoke_on_all([](wsrp::service& s) { (void)s.run(); })
+                .then([&] {
+                    return ss::sleep_abortable(std::chrono::minutes(2))
+                      .handle_exception(
+                        [](auto ignored) { wsrp::ws_log.info("aborting..."); });
+                });
+          })
+          .then([&ws] { return ws.stop(); })
+          .then([] { return ss::make_ready_future<int>(0); });
+
+        /*
         return ss::async([&, addrs = std::move(addrs)] {
-	    // Make our client
+            // Make our client
             wsrp::redpanda client{wsrp::make_config(addrs)};
 
-	    // Connect
-	    auto f = client.connect().then([&] {
+            // Connect
+            auto f = client.connect().then([&] {
                 wsrp::ws_log.info("connected!");
 
-		wsrp::record r{};
-		const char* key = "mykey";
-		const char* val = "myvalue";
-		r.key.append(key, std::strlen(key));
-		r.value.append(val, std::strlen(val));
-		std::vector<wsrp::record> records{};
-		records.emplace_back(std::move(r));
+                wsrp::record r{};
+                const char* key = "mykey";
+                const char* val = "myvalue";
+                r.key.append(key, std::strlen(key));
+                r.value.append(val, std::strlen(val));
+                std::vector<wsrp::record> records{};
+                records.emplace_back(std::move(r));
 
-		// Produce
-		return client.produce(model::topic{"junk"}, std::move(records))
+                // Produce
+                return client.produce(model::topic{"junk"}, std::move(records))
                   .then([](auto res) {
                       wsrp::ws_log.info("produced!");
                       return ss::make_ready_future<int>(0);
@@ -80,5 +96,6 @@ int main(int argc, char** argv) {
             wsrp::ws_log.info("result = {}", res);
             return 0;
         });
+        */
     });
 }

@@ -33,6 +33,7 @@ ss::future<> handler(
             return ss::make_ready_future<stop_iter>(stop_iter::yes);
         }
         return ss::do_with(wsrp::record{}, [&](wsrp::record& r) {
+	    ws_log.info("handling request");
             return in
               // Read our 2-byte length of the key.
               .read_exactly(2)
@@ -42,6 +43,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   size_t const len = ss::read_be<uint16_t>(buf.get());
+		  ws_log.info("read key length: {}", len);
                   return in.read_exactly(len);
               })
               // Read our key.
@@ -52,6 +54,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
 		  r.key.append(std::move(buf));
+		  ws_log.info("read key: {}", r.key);
                   return in.read_exactly(2);
               })
               // Read the 2-byte length of the value.
@@ -61,6 +64,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   size_t const len = ss::read_be<uint16_t>(buf.get());
+		  ws_log.info("read value length: {}", len);
                   return in.read_exactly(len);
               })
               // Read the value.
@@ -70,6 +74,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   r.value.append(std::move(buf));
+		  ws_log.info("producing record: {}", r);
                   return q->push_eventually(std::move(r)).then([] {
                       return ss::make_ready_future<stop_iter>(stop_iter::no);
                   });
@@ -79,7 +84,7 @@ ss::future<> handler(
                   try {
                       std::rethrow_exception(std::move(e));
                   } catch (const std::exception& e) {
-                      ws_log.info("{}", e.what());
+                      ws_log.error("{}", e.what());
                   }
                   return ss::make_ready_future<stop_iter>(stop_iter::yes);
               });
@@ -88,6 +93,7 @@ ss::future<> handler(
 }
 
 ss::future<> service::run() {
+    ws_log.info("starting...");
     try {
         // Create a handler function bound to our shard-local queue.
         auto fn = std::bind(
