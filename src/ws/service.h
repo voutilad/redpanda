@@ -14,6 +14,7 @@ namespace ws = seastar::experimental::websocket;
 
 namespace wsrp {
 
+static const uint16_t DEFAULT_PORT = 8000;
 static const int QUEUE_DEPTH = 256;
 
 /// \brief A WebSocket service that ferries key/value pairs into a Redpanda
@@ -22,13 +23,16 @@ static const int QUEUE_DEPTH = 256;
 /// For now, this is a single hardcoded topic.
 class service {
     ss::socket_address _sa;
+    ss::sstring _topic;
     std::optional<ws::server> _ws;
     ss::shared_ptr<ss::queue<wsrp::record>> _queue;
-    std::optional<wsrp::redpanda> _rp;
 
 public:
-    explicit service(ss::socket_address listen_on)
-      : _sa(listen_on)
+    explicit service(
+      std::string topic,
+      std::string host = "127.0.0.1", uint16_t port = DEFAULT_PORT)
+      : _topic(ss::sstring{topic})
+      , _sa(ss::socket_address(ss::ipv4_addr(host, port)))
       , _queue(ss::make_shared<ss::queue<wsrp::record>>(QUEUE_DEPTH)) {
         _ws = ws::server{};
     }

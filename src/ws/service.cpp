@@ -94,7 +94,11 @@ ss::future<> handler(
 }
 
 ss::future<> service::run() {
-    ws_log.info("starting...");
+    if (!_ws) {
+        throw new std::runtime_error(
+          "run() called without initializing websocket service");
+    }
+    ws_log.info("starting websocket service sinking to '{}'", _topic);
     try {
         // Create a handler function bound to our shard-local queue.
         auto fn = std::bind(
@@ -114,37 +118,40 @@ ss::future<> service::run() {
 
     // We're running. Now we need to start consuming from our queue and
     // producing to Redpanda.
+    // XXX do this in an async "thread" due to lifetime issues I don't
+    // quite have my head around with the Redpanda client.
     return ss::async([&, this] {
-        if (_rp) {
-            throw new std::runtime_error("run() called twice?");
-        }
-
         auto addrs = std::vector<net::unresolved_address>{{"127.0.0.1", 9092}};
         wsrp::redpanda rp{wsrp::make_config(std::move(addrs))};
 
         auto f = rp.connect().then([this, &rp] {
-            ws_log.info("starting to consume from queue");
-            return _queue->pop_eventually().then([this, &rp](wsrp::record val) {
-                ws_log.info("popped {}", val);
-                // XXX need a buffering vector
-                std::vector<wsrp::record> batch{};
-                batch.emplace_back(std::move(val));
+            return ss::keep_doing([this, &rp] {
+                return _queue->pop_eventually().then(
+                  [this, &rp](wsrp::record val) {
+                      ws_log.info("popped {}", val);
+                      // XXX need a buffering vector...
+                      std::vector<wsrp::record> batch{};
+                      batch.emplace_back(std::move(val));
 
-                return rp.produce(model::topic{"junk"}, std::move(batch))
-                  .then([](auto unused) {
-                      ws_log.info("sent record");
-                      return ss::make_ready_future<>();
+                      auto cnt = batch.size();
+                      return rp.produce(model::topic{_topic}, std::move(batch))
+                        .then([cnt](auto unused) {
+                            ws_log.debug("sent {} record(s)", cnt);
+                            return ss::make_ready_future<>();
+                        });
                   });
-            });
+            }).handle_exception([](auto unused) {
+	      return ss::make_ready_future<>();
+	    });
         });
-        f.get();
+	f.wait();
         return;
     });
 }
 
 ss::future<> service::stop() {
-    ws_log.info("stopping...");
     if (_ws) {
+        ws_log.info("stopping...");
         return _ws->stop();
     }
     return ss::make_ready_future<>();
