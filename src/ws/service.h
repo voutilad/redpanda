@@ -24,10 +24,11 @@ class service {
     ss::socket_address _sa;
     std::optional<ws::server> _ws;
     ss::shared_ptr<ss::queue<wsrp::record>> _queue;
+    std::optional<wsrp::redpanda> _rp;
 
 public:
-    explicit service(ss::socket_address sa)
-      : _sa(sa)
+    explicit service(ss::socket_address listen_on)
+      : _sa(listen_on)
       , _queue(ss::make_shared<ss::queue<wsrp::record>>(QUEUE_DEPTH)) {
         _ws = ws::server{};
     }
