@@ -16,12 +16,30 @@ namespace kc = kafka::client;
 namespace wsrp {
 
 struct record {
-    iobuf key;
-    iobuf value;
+    iobuf key{};
+    iobuf value{};
+
+    record() noexcept
+      : key{}
+      , value{} {}
 
     record(iobuf&& key, iobuf&& value) noexcept
       : key(std::move(key))
       , value(std::move(value)) {}
+
+    record(
+      ss::temporary_buffer<char>&& key_buf,
+      ss::temporary_buffer<char>&& value_buf) noexcept
+      : key{}
+      , value{} {
+        key.append(std::move(key_buf));
+        value.append(std::move(value_buf));
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const record& record) {
+        os << "{key: " << record.key << ", value: " << record.value << "}";
+        return os;
+    }
 };
 
 struct produce_result {
@@ -50,7 +68,7 @@ std::vector<net::unresolved_address>
 parse_addresses(std::vector<std::string>& brokers) noexcept;
 
 /// \brief Make a simple config object for bootstrapping a Redpanda client
-YAML::Node make_config(const std::vector<net::unresolved_address> seeds);
+YAML::Node make_config(const std::vector<net::unresolved_address>& seeds);
 
 // A queue consumer that producers to Redpanda.
 class redpanda {

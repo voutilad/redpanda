@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "redpanda.h"
+
 #include <seastar/core/seastar.hh>
 #include <seastar/websocket/server.hh>
 
@@ -14,18 +16,19 @@ namespace wsrp {
 
 static const int QUEUE_DEPTH = 256;
 
-/// \brief A WebSocket service that ferries key/value pairs into a Redpanda topic.
+/// \brief A WebSocket service that ferries key/value pairs into a Redpanda
+/// topic.
 ///
 /// For now, this is a single hardcoded topic.
 class service {
     ss::socket_address _sa;
     std::optional<ws::server> _ws;
-    ss::shared_ptr<ss::queue<ss::sstring>> _queue; // TODO: migrate to concrete type?
+    ss::shared_ptr<ss::queue<wsrp::record>> _queue;
 
 public:
     explicit service(ss::socket_address sa)
       : _sa(sa)
-      , _queue(ss::make_shared<ss::queue<ss::sstring>>(QUEUE_DEPTH)) {
+      , _queue(ss::make_shared<ss::queue<wsrp::record>>(QUEUE_DEPTH)) {
         _ws = ws::server{};
     }
 

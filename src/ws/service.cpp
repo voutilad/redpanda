@@ -4,6 +4,7 @@
 #include "service.h"
 
 #include "logger.h"
+#include "redpanda.h"
 
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/seastar.hh>
@@ -23,7 +24,7 @@ namespace wsrp {
 /// \param in - the input stream to process
 /// \param out - ignored.
 ss::future<> handler(
-  ss::shared_ptr<ss::queue<ss::sstring>>& q,
+  ss::shared_ptr<ss::queue<wsrp::record>>& q,
   ss::input_stream<char>& in,
   ss::output_stream<char>& out) {
     return ss::repeat([&in, &q] {
@@ -31,59 +32,58 @@ ss::future<> handler(
         if (in.eof()) {
             return ss::make_ready_future<stop_iter>(stop_iter::yes);
         }
-
-        return in
-          // Read our 2-byte length of the key.
-          .read_exactly(2)
-          .then([&in](char_buf buf) {
-              if (buf.size() != 2 || in.eof()) {
-                  return ss::make_exception_future<char_buf>(
-                    std::runtime_error("disconnect"));
-              }
-              size_t const len = ss::read_be<uint16_t>(buf.get());
-              return in.read_exactly(len);
-          })
-          // Read our key.
-          .then([&in](char_buf buf) {
-              if (buf.empty() || in.eof()) {
-                  return ss::make_exception_future<char_buf>(
-                    std::runtime_error("disconnect"));
-              }
-              auto key = ss::sstring(buf.get(), buf.size());
-              ws_log.info("key: {}", key);
-              return in.read_exactly(2);
-          })
-          // Read the 2-byte length of the value.
-          .then([&in](char_buf buf) {
-              if (buf.size() != 2 || in.eof()) {
-                  return ss::make_exception_future<char_buf>(
-                    std::runtime_error("disconnect"));
-              }
-              size_t const len = ss::read_be<uint16_t>(buf.get());
-              return in.read_exactly(len);
-          })
-          // Read the value.
-          .then([&in, &q](char_buf buf) {
-              if (buf.empty() || in.eof()) {
-                  return ss::make_exception_future<stop_iter>(
-                    std::runtime_error("disconnect"));
-              }
-              auto val = ss::sstring(buf.get(), buf.size());
-
-              // TODO:
-              return q->push_eventually(std::move(val)).then([] {
-                  return ss::make_ready_future<stop_iter>(stop_iter::no);
+        return ss::do_with(wsrp::record{}, [&](wsrp::record& r) {
+            return in
+              // Read our 2-byte length of the key.
+              .read_exactly(2)
+              .then([&in](char_buf buf) {
+                  if (buf.size() != 2 || in.eof()) {
+                      return ss::make_exception_future<char_buf>(
+                        std::runtime_error("disconnect"));
+                  }
+                  size_t const len = ss::read_be<uint16_t>(buf.get());
+                  return in.read_exactly(len);
+              })
+              // Read our key.
+	      // XXX TODO: handle reading empty key
+              .then([&in, &r](char_buf buf) {
+                  if (buf.empty() || in.eof()) {
+                      return ss::make_exception_future<char_buf>(
+                        std::runtime_error("disconnect"));
+                  }
+		  r.key.append(std::move(buf));
+                  return in.read_exactly(2);
+              })
+              // Read the 2-byte length of the value.
+              .then([&in](char_buf buf) {
+                  if (buf.size() != 2 || in.eof()) {
+                      return ss::make_exception_future<char_buf>(
+                        std::runtime_error("disconnect"));
+                  }
+                  size_t const len = ss::read_be<uint16_t>(buf.get());
+                  return in.read_exactly(len);
+              })
+              // Read the value.
+              .then([&in, &q, &r](char_buf buf) {
+                  if (buf.empty() || in.eof()) {
+                      return ss::make_exception_future<stop_iter>(
+                        std::runtime_error("disconnect"));
+                  }
+                  r.value.append(std::move(buf));
+                  return q->push_eventually(std::move(r)).then([] {
+                      return ss::make_ready_future<stop_iter>(stop_iter::no);
+                  });
+              })
+              // If anything goes wrong, consider it a disconnect for now.
+              .handle_exception([](std::exception_ptr e) {
+                  try {
+                      std::rethrow_exception(std::move(e));
+                  } catch (const std::exception& e) {
+                      ws_log.info("{}", e.what());
+                  }
+                  return ss::make_ready_future<stop_iter>(stop_iter::yes);
               });
-          })
-          // If anything goes wrong, consider it a disconnect for now.
-          .handle_exception([](std::exception_ptr e) {
-              try {
-                  std::rethrow_exception(std::move(e));
-              } catch (const std::exception& e) {
-                  ws_log.info("{}", e.what());
-              }
-              return ss::make_ready_future<stop_iter>(stop_iter::yes);
-          });
+        });
     });
 }
 
@@ -109,7 +109,7 @@ ss::future<> service::run() {
     ws_log.info("listening on {}", _sa);
 
     return ss::keep_doing([this] {
-               return _queue->pop_eventually().then([](ss::sstring val) {
+               return _queue->pop_eventually().then([](wsrp::record val) {
                    ws_log.info("popped {}", val);
                    return ss::make_ready_future<>();
                });

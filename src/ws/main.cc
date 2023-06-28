@@ -60,8 +60,16 @@ int main(int argc, char** argv) {
 	    auto f = client.connect().then([&] {
                 wsrp::ws_log.info("connected!");
 
+		wsrp::record r{};
+		const char* key = "mykey";
+		const char* val = "myvalue";
+		r.key.append(key, std::strlen(key));
+		r.value.append(val, std::strlen(val));
+		std::vector<wsrp::record> records{};
+		records.emplace_back(std::move(r));
+
 		// Produce
-		return client.produce(model::topic{"junk"}, {})
+		return client.produce(model::topic{"junk"}, std::move(records))
                   .then([](auto res) {
                       wsrp::ws_log.info("produced!");
                       return ss::make_ready_future<int>(0);

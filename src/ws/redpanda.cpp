@@ -55,7 +55,7 @@ parse_addresses(std::vector<std::string>& brokers) noexcept {
     return std::move(addrs);
 }
 
-YAML::Node make_config(const std::vector<net::unresolved_address> seeds) {
+YAML::Node make_config(const std::vector<net::unresolved_address>& seeds) {
     kc::configuration cfg{};
     cfg.brokers.set_value(seeds);
     return config::to_yaml(cfg, config::redact_secrets::no);
@@ -68,21 +68,28 @@ ss::future<produce_result>
 redpanda::produce(const model::topic topic, std::vector<record>&& records) {
     // ignore custom partitioner for now...
     std::vector<kc::record_essence> essences;
-    // for (auto& record : std::move(records)) {
-    kc::record_essence e{};
-    e.value = iobuf();
-    e.value->append("crap", 4);
-    e.partition_id = model::partition_id{0};
-    // e.key = std::move(record.key);
-    // e.value = std::move(record.value);
-    essences.emplace_back(std::move(e));
-    //}
+
+    for (auto& record : records) {
+	kc::record_essence e{};
+	e.key = std::move(record.key);
+	e.value = std::move(record.value);
+	// e.partition_id = model::partition_id{0};
+	essences.emplace_back(std::move(e));
+    }
 
     ws_log.info("producing {} records...", essences.size());
     return _client.produce_records(topic, std::move(essences))
       .then([](kafka::produce_response res) {
-          // XXX ignore errors for now
-          ws_log.info("produce result: {}", res);
+          // XXX ignore errors for now, but print them
+          for (const auto& r : res.data.responses) {
+              for (const auto& p : r.partitions) {
+                  ws_log.info(
+                    "topic {}[{}]: {}",
+                    r.name,
+                    p.partition_index,
+                    p.error_code);
+              }
+          }
           produce_result pr{};
           pr.cnt = 1;
           return ss::make_ready_future<produce_result>(std::move(pr));
