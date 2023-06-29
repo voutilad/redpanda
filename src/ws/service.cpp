@@ -123,43 +123,56 @@ ss::future<> service::run() {
     // producing to Redpanda.
     // XXX do this in an async "thread" due to lifetime issues I don't
     // quite have my head around with the Redpanda client.
-    return ss::async([&, this] {
-        auto f = _rp->connect().then([this] {
-            return ss::keep_doing([this] {
-                       return _queue->pop_eventually().then(
-                         [this](wsrp::record val) {
-                             ws_log.debug("popped {}", val);
-                             // XXX need a buffering vector...
-                             std::vector<wsrp::record> batch{};
-                             batch.emplace_back(std::move(val));
+    return _rp->connect()
+      .handle_exception([](std::exception_ptr eptr) {
+          ws_log.warn("failed connecting to seed brokers: {}", eptr);
+          return ss::make_ready_future<>();
+      })
+      .then([this] {
+          return ss::keep_doing([this] {
+                     return _queue->pop_eventually().then(
+                       [this](wsrp::record val) {
+                           ws_log.debug("popped {}", val);
+                           // XXX need a buffering vector...
+                           std::vector<wsrp::record> batch{};
+                           batch.emplace_back(std::move(val));
 
-                             auto cnt = batch.size();
-                             return _rp
-                               ->produce(model::topic{_topic}, std::move(batch))
-                               .then([cnt](auto unused) {
-                                   ws_log.debug("sent {} record(s)", cnt);
-                                   return ss::make_ready_future<>();
-                               });
-                         });
-                   })
-              .handle_exception(
-                [](auto unused) { return ss::make_ready_future<>(); });
-        });
-        f.wait();
-        return;
-    });
+                           auto cnt = batch.size();
+                           return _rp
+                             ->produce(model::topic{_topic}, std::move(batch))
+                             .then([cnt](auto unused) {
+                                 ws_log.debug("sent {} record(s)", cnt);
+                                 return ss::make_ready_future<>();
+                             });
+                       });
+                 })
+            .handle_exception(
+              [](auto unused) { return ss::make_ready_future<>(); });
+      });
 }
 
 ss::future<> service::stop() {
     if (_ws) {
         ws_log.info("stopping");
-	if (_rp) {
-	    return _rp->disconnect().then([this] {
-		return _ws->stop();
-	    });
-	}
+        if (_rp) {
+            // If we're connected to brokers, disconnect. Then stop the
+            // websocket service.
+            return _rp->is_connected().then([this](bool connected) {
+                if (connected) {
+                    return _rp->disconnect().then(
+                      [this] { return _ws->stop(); });
+                }
+
+                // If not connected, just stop the websocket service.
+                return _ws->stop();
+            });
+        }
+
+        // No Redpanda client.
         return _ws->stop();
     }
+
+    // Websocket service wasn't running?! Punt.
     return ss::make_ready_future<>();
 }
 

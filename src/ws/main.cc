@@ -66,7 +66,6 @@ int main(int argc, char** argv) {
             return ss::make_exception_future<int>(
               std::runtime_error("failed to parse seed addresses"));
         }
-
         auto topic = c["topic"].as<std::string>();
         auto host = c["host"].as<std::string>();
         auto port = c["port"].as<std::uint16_t>();
@@ -74,15 +73,25 @@ int main(int argc, char** argv) {
 
         return ws.start(topic, seeds, host, port)
           .then([&] {
-              return ws.invoke_on_all([](wsrp::service& s) { (void)s.run(); });
+              return ws.invoke_on_all([](wsrp::service& s) {
+                  // Don't return the future, preventing it from blocking
+                  // progression to our timeout step.
+                  (void)s.run();
+              });
           })
           .then([timeout] {
+              // If we have a given timeout, wait here for timeout or C-c.
               auto dur = (timeout > 0) ? std::chrono::seconds(timeout)
                                        : std::chrono::years(100);
-              return ss::sleep_abortable(dur).handle_exception(
-                [](auto ignored) {});
+              return ss::sleep_abortable(dur);
           })
           .then([&ws] { return ws.stop(); })
-          .then([] { return ss::make_ready_future<int>(0); });
+          .then([] { return ss::make_ready_future<int>(0); })
+          .handle_exception([](std::exception_ptr eptr) {
+              // XXX in debug mode we may trigger an assert here as ws.stop()
+              // may not have been called, but calling it here might leak parts
+              // of the Redpanda client. TBD what to do to fix.
+              return ss::make_ready_future<int>(1);
+          });
     });
 }

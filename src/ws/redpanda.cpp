@@ -63,7 +63,10 @@ YAML::Node make_config(const std::vector<net::unresolved_address>& seeds) {
 
 // XXX inline these in redpanda.h?
 ss::future<bool> redpanda::is_connected() { return _client->is_connected(); }
-ss::future<> redpanda::connect() { return _client->connect(); }
+ss::future<> redpanda::connect() {
+    ws_log.info("connecting to seeds {}", _seeds);
+    return _client->connect();
+}
 ss::future<> redpanda::disconnect() { return _client->stop(); }
 
 ss::future<produce_result>
