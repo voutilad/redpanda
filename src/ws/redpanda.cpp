@@ -61,8 +61,10 @@ YAML::Node make_config(const std::vector<net::unresolved_address>& seeds) {
     return config::to_yaml(cfg, config::redact_secrets::no);
 }
 
-ss::future<bool> redpanda::is_connected() { return _client.is_connected(); }
-ss::future<> redpanda::connect() { return _client.connect(); }
+// XXX inline these in redpanda.h?
+ss::future<bool> redpanda::is_connected() { return _client->is_connected(); }
+ss::future<> redpanda::connect() { return _client->connect(); }
+ss::future<> redpanda::disconnect() { return _client->stop(); }
 
 ss::future<produce_result>
 redpanda::produce(const model::topic topic, std::vector<record>&& records) {
@@ -70,20 +72,21 @@ redpanda::produce(const model::topic topic, std::vector<record>&& records) {
     std::vector<kc::record_essence> essences;
 
     for (auto& record : records) {
-	kc::record_essence e{};
-	e.key = std::move(record.key);
-	e.value = std::move(record.value);
-	// e.partition_id = model::partition_id{0};
-	essences.emplace_back(std::move(e));
+        kc::record_essence e{};
+        // XXX hardcode an empty partition id for now...let the built in hashing
+        // do it's thing
+        e.key = std::move(record.key);
+        e.value = std::move(record.value);
+        essences.emplace_back(std::move(e));
     }
 
-    ws_log.info("producing {} records...", essences.size());
-    return _client.produce_records(topic, std::move(essences))
+    ws_log.info("producing {} records to {}", essences.size(), topic);
+    return _client->produce_records(topic, std::move(essences))
       .then([](kafka::produce_response res) {
-          // XXX ignore errors for now, but print them
+          // XXX assume we have debug enabled and loop
           for (const auto& r : res.data.responses) {
               for (const auto& p : r.partitions) {
-                  ws_log.info(
+                  ws_log.debug(
                     "topic {}[{}]: {}",
                     r.name,
                     p.partition_index,
@@ -93,8 +96,11 @@ redpanda::produce(const model::topic topic, std::vector<record>&& records) {
           produce_result pr{};
           pr.cnt = 1;
           return ss::make_ready_future<produce_result>(std::move(pr));
+      })
+      .handle_exception([](std::exception_ptr e) {
+          ws_log.warn("failed to produce records: {}", e);
+          return ss::make_exception_future<produce_result>(e);
       });
-    return ss::make_ready_future<produce_result>(produce_result{});
 }
 
 } // namespace wsrp

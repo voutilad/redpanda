@@ -7,6 +7,7 @@
 #include "redpanda.h"
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/websocket/server.hh>
 
 namespace ss = seastar;
@@ -26,14 +27,18 @@ class service {
     ss::sstring _topic;
     std::optional<ws::server> _ws;
     ss::shared_ptr<ss::queue<wsrp::record>> _queue;
+    ss::lw_shared_ptr<wsrp::redpanda> _rp;
 
 public:
     explicit service(
       std::string topic,
-      std::string host = "127.0.0.1", uint16_t port = DEFAULT_PORT)
+      const std::vector<net::unresolved_address>& seeds,
+      std::string host = "127.0.0.1",
+      uint16_t port = DEFAULT_PORT)
       : _topic(ss::sstring{topic})
       , _sa(ss::socket_address(ss::ipv4_addr(host, port)))
-      , _queue(ss::make_shared<ss::queue<wsrp::record>>(QUEUE_DEPTH)) {
+      , _queue(ss::make_shared<ss::queue<wsrp::record>>(QUEUE_DEPTH))
+      , _rp(ss::make_lw_shared<wsrp::redpanda>(seeds)) {
         _ws = ws::server{};
     }
 

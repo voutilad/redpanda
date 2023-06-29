@@ -61,10 +61,10 @@ int main(int argc, char** argv) {
             return ss::make_exception_future<int>(std::runtime_error(
               "must specify at least one valid seed broker"));
         }
-        auto addrs = wsrp::parse_addresses(brokers);
-        if (addrs.empty()) {
+        auto seeds = wsrp::parse_addresses(brokers);
+        if (seeds.empty()) {
             return ss::make_exception_future<int>(
-              std::runtime_error("failed to parse addresses"));
+              std::runtime_error("failed to parse seed addresses"));
         }
 
         auto topic = c["topic"].as<std::string>();
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         auto port = c["port"].as<std::uint16_t>();
         auto timeout = c["timeout"].as<std::int32_t>();
 
-        return ws.start(topic, host, port)
+        return ws.start(topic, seeds, host, port)
           .then([&] {
               return ws.invoke_on_all([](wsrp::service& s) { (void)s.run(); });
           })

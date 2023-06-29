@@ -7,6 +7,8 @@
 #include "kafka/client/configuration.h"
 #include "net/unresolved_address.h"
 
+#include <seastar/core/shared_ptr.hh>
+
 #include <memory>
 #include <ostream>
 
@@ -72,16 +74,21 @@ YAML::Node make_config(const std::vector<net::unresolved_address>& seeds);
 
 // A queue consumer that producers to Redpanda.
 class redpanda {
-    const YAML::Node _config;
-    kc::client _client;
+    std::vector<net::unresolved_address> _seeds;
+    kc::configuration _cfg{};
+    ss::lw_shared_ptr<kc::client> _client;
 
 public:
-    redpanda(const YAML::Node config)
-      : _config(config)
-      , _client{config} {}
+    redpanda(const std::vector<net::unresolved_address>& seeds)
+      : _seeds(seeds) {
+        _cfg.brokers.set_value(_seeds);
+        _client = ss::make_lw_shared<kc::client>(
+          config::to_yaml(_cfg, config::redact_secrets::no));
+    }
 
     ss::future<bool> is_connected();
     ss::future<> connect();
+    ss::future<> disconnect();
     ss::future<produce_result>
     produce(const model::topic, std::vector<record>&&);
 };

@@ -34,7 +34,7 @@ ss::future<> handler(
             return ss::make_ready_future<stop_iter>(stop_iter::yes);
         }
         return ss::do_with(wsrp::record{}, [&](wsrp::record& r) {
-            ws_log.info("handling request");
+            ws_log.debug("handling request");
             return in
               // Read our 2-byte length of the key.
               .read_exactly(2)
@@ -44,7 +44,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   size_t const len = ss::read_be<uint16_t>(buf.get());
-                  ws_log.info("read key length: {}", len);
+                  ws_log.debug("read key length: {}", len);
                   return in.read_exactly(len);
               })
               // Read our key.
@@ -55,7 +55,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   r.key.append(std::move(buf));
-                  ws_log.info("read key: {}", r.key);
+                  ws_log.debug("read key: {}", r.key);
                   return in.read_exactly(2);
               })
               // Read the 2-byte length of the value.
@@ -65,7 +65,7 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   size_t const len = ss::read_be<uint16_t>(buf.get());
-                  ws_log.info("read value length: {}", len);
+                  ws_log.debug("read value length: {}", len);
                   return in.read_exactly(len);
               })
               // Read the value.
@@ -75,7 +75,6 @@ ss::future<> handler(
                         std::runtime_error("disconnect"));
                   }
                   r.value.append(std::move(buf));
-                  ws_log.info("producing record: {}", r);
                   return q->push_eventually(std::move(r)).then([] {
                       return ss::make_ready_future<stop_iter>(stop_iter::no);
                   });
@@ -98,7 +97,11 @@ ss::future<> service::run() {
         throw new std::runtime_error(
           "run() called without initializing websocket service");
     }
-    ws_log.info("starting websocket service sinking to '{}'", _topic);
+    if (!_rp) {
+        throw new std::runtime_error(
+          "run() called without initializing redpanda client");
+    }
+
     try {
         // Create a handler function bound to our shard-local queue.
         auto fn = std::bind(
@@ -114,44 +117,47 @@ ss::future<> service::run() {
         ws_log.error("uh oh! {}", e);
         return ss::make_exception_future(std::move(e));
     }
-    ws_log.info("listening on {}", _sa);
+    ws_log.info("listening on {} and sinking to {}", _sa, _topic);
 
     // We're running. Now we need to start consuming from our queue and
     // producing to Redpanda.
     // XXX do this in an async "thread" due to lifetime issues I don't
     // quite have my head around with the Redpanda client.
     return ss::async([&, this] {
-        auto addrs = std::vector<net::unresolved_address>{{"127.0.0.1", 9092}};
-        wsrp::redpanda rp{wsrp::make_config(std::move(addrs))};
+        auto f = _rp->connect().then([this] {
+            return ss::keep_doing([this] {
+                       return _queue->pop_eventually().then(
+                         [this](wsrp::record val) {
+                             ws_log.debug("popped {}", val);
+                             // XXX need a buffering vector...
+                             std::vector<wsrp::record> batch{};
+                             batch.emplace_back(std::move(val));
 
-        auto f = rp.connect().then([this, &rp] {
-            return ss::keep_doing([this, &rp] {
-                return _queue->pop_eventually().then(
-                  [this, &rp](wsrp::record val) {
-                      ws_log.info("popped {}", val);
-                      // XXX need a buffering vector...
-                      std::vector<wsrp::record> batch{};
-                      batch.emplace_back(std::move(val));
-
-                      auto cnt = batch.size();
-                      return rp.produce(model::topic{_topic}, std::move(batch))
-                        .then([cnt](auto unused) {
-                            ws_log.debug("sent {} record(s)", cnt);
-                            return ss::make_ready_future<>();
-                        });
-                  });
-            }).handle_exception([](auto unused) {
-	      return ss::make_ready_future<>();
-	    });
+                             auto cnt = batch.size();
+                             return _rp
+                               ->produce(model::topic{_topic}, std::move(batch))
+                               .then([cnt](auto unused) {
+                                   ws_log.debug("sent {} record(s)", cnt);
+                                   return ss::make_ready_future<>();
+                               });
+                         });
+                   })
+              .handle_exception(
+                [](auto unused) { return ss::make_ready_future<>(); });
         });
-	f.wait();
+        f.wait();
         return;
     });
 }
 
 ss::future<> service::stop() {
     if (_ws) {
-        ws_log.info("stopping...");
+        ws_log.info("stopping");
+	if (_rp) {
+	    return _rp->disconnect().then([this] {
+		return _ws->stop();
+	    });
+	}
         return _ws->stop();
     }
     return ss::make_ready_future<>();
